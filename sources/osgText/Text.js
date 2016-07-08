@@ -83,7 +83,7 @@ Text.RIGHT_CENTER = 7;
 Text.RIGHT_BOTTOM = 8;
 
 /** @lends Text.prototype */
-Text.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( AutoTransform.prototype, {
+MACROUTILS.createPrototypeClass( Text, MACROUTILS.objectInherit( AutoTransform.prototype, {
 
     drawText: function () {
         if ( this._geometry !== undefined ) {

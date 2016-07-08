@@ -89,7 +89,6 @@ RenderLeaf.prototype = {
 
         return function ( state ) {
 
-
             var program = state.getLastProgramApplied();
             var programInstanceID = program.getInstanceID();
             var cache = state.getCacheUniformsApplyRenderLeaf();
@@ -102,6 +101,7 @@ RenderLeaf.prototype = {
 
             obj.apply( state, this._modelView, this._modelWorld, this._view, this._projection, this._normal );
 
+            // if ( window.doRender )
             this._geometry.drawImplementation( state );
 
         };
@@ -109,8 +109,30 @@ RenderLeaf.prototype = {
 
     render: ( function () {
         var previousHash;
+        var currentFrame = 0;
+        window.nbCalls = 0;
+        window.caseA = 0;
+        window.caseB = 0;
+        window.caseC = 0;
+        window.caseD = 0;
 
         return function ( state, previousLeaf ) {
+
+            var fs = state._frameStamp;
+            if ( fs ) {
+                var frameNumber = fs.getFrameNumber();
+
+                if ( currentFrame !== frameNumber ) {
+                    // console.log( window.nbCalls, window.caseA, window.caseB, window.caseC, window.caseD );
+                    currentFrame = frameNumber;
+                    window.nbCalls = 0;
+                    window.caseA = 0;
+                    window.caseB = 0;
+                    window.caseC = 0;
+                    window.caseD = 0;
+                }
+                window.nbCalls++;
+            }
 
             var prevRenderGraph;
             var prevRenderGraphParent;
@@ -176,12 +198,16 @@ RenderLeaf.prototype = {
                     state.applyStateSet( curRenderGraphStateSet );
                     previousHash = state.getStateSetStackHash();
 
+                    window.caseA++;
+
                 } else if ( curRenderGraph !== prevRenderGraph ) {
 
                     // Case B
+                    // 4.5 ms / 4.8 ms
                     state.applyStateSet( curRenderGraphStateSet );
                     previousHash = state.getStateSetStackHash();
 
+                    window.caseB++;
                 } else {
 
                     // Case C
@@ -194,6 +220,7 @@ RenderLeaf.prototype = {
                         state.applyStateSet( curRenderGraphStateSet );
                         previousHash = hash;
                     }
+                    window.caseC++;
                 }
 
             } else {
@@ -201,7 +228,7 @@ RenderLeaf.prototype = {
                 StateGraph.moveStateGraph( state, undefined, curRenderGraphParent );
                 state.applyStateSet( curRenderGraphStateSet );
                 previousHash = state.getStateSetStackHash();
-
+                window.caseD++;
             }
 
             this.drawGeometry( state );

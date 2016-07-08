@@ -34,7 +34,7 @@ var MorphGeometry = function () {
 // sync with UpdateMorph
 var EFFECTIVE_EPS = MorphGeometry.EFFECTIVE_EPS = 0.05;
 
-MorphGeometry.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Geometry.prototype, {
+MACROUTILS.createPrototypeClass( MorphGeometry, MACROUTILS.objectInherit( Geometry.prototype, {
 
     init: function () {
         var animAttrib = new MorphAttribute( Math.min( 4, this.getMorphTargets().length ) );

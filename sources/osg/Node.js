@@ -43,7 +43,7 @@ Node._reservedMatrixStack = new MatrixMemoryPool();
 var nodeGetMat = Node._reservedMatrixStack.get.bind( Node._reservedMatrixStack );
 
 /** @lends Node.prototype */
-Node.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Object.prototype, {
+MACROUTILS.createPrototypeClass( Node, MACROUTILS.objectInherit( Object.prototype, {
     /**
       Return StateSet and create it if it does not exist yet
       @type StateSet

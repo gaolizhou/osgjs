@@ -21,7 +21,7 @@ var MorphAttribute = function ( nbTarget, disable ) {
 
 MorphAttribute.uniforms = {};
 
-MorphAttribute.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( StateAttribute.prototype, {
+MACROUTILS.createPrototypeStateAttribute( MorphAttribute, MACROUTILS.objectInherit( StateAttribute.prototype, {
 
     attributeType: 'Morph',
 

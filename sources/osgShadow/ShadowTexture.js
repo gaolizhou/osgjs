@@ -24,7 +24,7 @@ var ShadowTexture = function () {
 
 ShadowTexture.uniforms = {};
 /** @lends Texture.prototype */
-ShadowTexture.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Texture.prototype, {
+MACROUTILS.createPrototypeStateAttribute( ShadowTexture, MACROUTILS.objectInherit( Texture.prototype, {
 
     cloneType: function () {
         return new ShadowTexture();

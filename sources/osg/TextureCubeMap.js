@@ -23,7 +23,7 @@ var TextureCubeMap = function () {
 };
 
 /** @lends TextureCubeMap.prototype */
-TextureCubeMap.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Texture.prototype, {
+MACROUTILS.createPrototypeStateAttribute( TextureCubeMap, MACROUTILS.objectInherit( Texture.prototype, {
 
     setDefaultParameters: function () {
         Texture.prototype.setDefaultParameters.call( this );

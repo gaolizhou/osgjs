@@ -92,7 +92,7 @@ if ( Geometry.enableVAO ) Notify.log( 'enable VAO' );
 
 
 /** @lends Geometry.prototype */
-Geometry.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Node.prototype, {
+MACROUTILS.createPrototypeClass( Geometry, MACROUTILS.objectInherit( Node.prototype, {
 
     releaseGLObjects: function () {
 

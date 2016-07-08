@@ -9,7 +9,8 @@ var ShadowCastAttribute = function ( disable, shadowReceiveAttribute ) {
     this._enable = !disable;
     this._shadowReceiveAttribute = shadowReceiveAttribute;
 };
-ShadowCastAttribute.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( StateAttribute.prototype, {
+
+MACROUTILS.createPrototypeStateAttribute( ShadowCastAttribute, MACROUTILS.objectInherit( StateAttribute.prototype, {
     attributeType: 'ShadowCast',
     cloneType: function () {
         return new ShadowCastAttribute( true );

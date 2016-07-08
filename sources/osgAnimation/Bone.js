@@ -21,7 +21,7 @@ var Bone = function ( name ) {
     this._boneBoundingBox = new BoundingBox();
 };
 
-Bone.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( MatrixTransform.prototype, {
+MACROUTILS.createPrototypeClass( Bone, MACROUTILS.objectInherit( MatrixTransform.prototype, {
 
     // consistent color depending of id
     // _rand: function ( id ) {

@@ -171,7 +171,7 @@ var ShadowMap = function ( settings ) {
 
 
 /** @lends ShadowMap.prototype */
-ShadowMap.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( ShadowTechnique.prototype, {
+MACROUTILS.createPrototypeClass( ShadowMap, MACROUTILS.objectInherit( ShadowTechnique.prototype, {
 
     getDepthRange: function () {
         return this._depthRange;

@@ -31,7 +31,7 @@ var ShadowedScene = function () {
 };
 
 /** @lends ShadowedScene.prototype */
-ShadowedScene.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Node.prototype, {
+MACROUTILS.createPrototypeClass( ShadowedScene, MACROUTILS.objectInherit( Node.prototype, {
 
     getReceivingStateSet: function () {
 

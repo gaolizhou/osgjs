@@ -45,7 +45,7 @@ var ShadowReceiveAttribute = function ( lightNum, disable ) {
 };
 
 ShadowReceiveAttribute.uniforms = {};
-ShadowReceiveAttribute.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( StateAttribute.prototype, {
+MACROUTILS.createPrototypeStateAttribute( ShadowReceiveAttribute, MACROUTILS.objectInherit( StateAttribute.prototype, {
 
     attributeType: 'ShadowReceive',
 

@@ -51,7 +51,7 @@ Light.POINT = 'POINT';
 Light.HEMI = 'HEMI';
 
 Light.uniforms = {};
-Light.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( StateAttribute.prototype, {
+MACROUTILS.createPrototypeStateAttribute( Light, MACROUTILS.objectInherit( StateAttribute.prototype, {
 
     attributeType: 'Light',
 

@@ -40,7 +40,7 @@ var AutoTransform = function () {
 };
 
 /** @lends Autotransform.prototype */
-AutoTransform.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Transform.prototype, {
+MACROUTILS.createPrototypeClass( AutoTransform, MACROUTILS.objectInherit( Transform.prototype, {
 
     getMatrix: function () {
         return this._matrix;

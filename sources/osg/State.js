@@ -27,9 +27,8 @@ var State = function ( shaderGeneratorProxy ) {
     this._shaderGeneratorNames = new Stack();
     this.uniforms = new Map();
 
-    this.textureAttributeMapList = [];
-
-    this.attributeMap = new Map();
+    this.textureAttributeArrayList = [];
+    this.attributeArray = [];
 
     this.modelWorldMatrix = Uniform.createMatrix4( Matrix.create(), 'ModelWorldMatrix' );
     this.viewMatrix = Uniform.createMatrix4( Matrix.create(), 'ViewMatrix' );
@@ -62,16 +61,29 @@ var State = function ( shaderGeneratorProxy ) {
     // keep pointer on the last applied projection matrix
     this._projectionMatrix = undefined;
 
+    this.lastAppliedAttribute = [];
+    this.lastAppliedTextureAttribute = [];
+    this.lastAppliedAttributeLength = 0;
+    this.lastAppliedTextureAttributeLength = 0;
 
     // keep track of last applied program
     this._program = undefined;
     // inject a default program to initialize the stack Program
-    this.applyAttribute( new Program() );
+    var program = new Program();
+    this.applyAttribute( program );
+
+    // cache programAttribute access
+    this._programAttribute = this.attributeArray[ MACROUTILS.getOrCreateStateAttributeTypeMemberIndex( program ) ];
 
     this._numPushStateSet = 0;
+    this._numApply = 0;
+
 };
 
-State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Object.prototype, {
+State.TypeMemberIndex = 0;
+State.TextureTypeMemberIndex = 0;
+
+MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototype, {
 
     getCacheUniformsApplyRenderLeaf: function () {
         return this._programCommonUniformsCache;
@@ -105,20 +117,18 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         this._numPushStateSet++;
         this.stateSets.push( stateset );
 
-        if ( stateset.attributeMap ) {
-            this.pushAttributeMap( this.attributeMap, stateset.attributeMap );
-        }
+        this.pushAttributeMap( this.attributeArray, stateset._attributeArray, stateset._activeAttribute );
 
-        if ( stateset.textureAttributeMapList ) {
-            var list = stateset.textureAttributeMapList;
-            for ( var textureUnit = 0, l = list.length; textureUnit < l; textureUnit++ ) {
-                if ( !list[ textureUnit ] ) {
-                    continue;
-                }
+        var textureAttributeArrayList = stateset._textureAttributeArrayList;
+        var activeTextureUnits = stateset._activeTextureAttributeUnit;
+        var activeTextureAttribute = stateset._activeTextureAttribute;
 
-                var textureUnitAttributeMap = this.getOrCreateTextureAttributeMap( textureUnit );
-                this.pushAttributeMap( textureUnitAttributeMap, list[ textureUnit ] );
-            }
+        for ( var i = 0, l = activeTextureUnits.length; i < l; i++ ) {
+            var unit = activeTextureUnits[ i ];
+            var attributeArray = textureAttributeArrayList[ unit ];
+
+            var textureUnitAttributeArray = this.getOrCreateTextureAttributeArray( unit );
+            this.pushAttributeMap( textureUnitAttributeArray, attributeArray, activeTextureAttribute );
         }
 
         if ( stateset.uniforms ) {
@@ -195,6 +205,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
     },
 
     resetStats: function () {
+        this._numApply = 0;
         this._numPushStateSet = 0;
     },
 
@@ -209,7 +220,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
         var normal = Matrix.create();
 
-        return function StateApplyModelViewMatrix( matrix ) {
+        return function StateApplyModelViewMatrix ( matrix ) {
 
             if ( this._modelViewMatrix === matrix ) return false;
 
@@ -376,6 +387,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
     },
 
     applyStateSet: function ( stateset ) {
+        // 0.7 ms sans le apply
         this.pushStateSet( stateset );
         this.apply();
         this.popStateSet();
@@ -401,18 +413,19 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
         var stateset = this.stateSets.pop();
 
-        if ( stateset.attributeMap ) {
-            this.popAttributeMap( this.attributeMap, stateset.attributeMap );
-        }
 
-        if ( stateset.textureAttributeMapList ) {
-            var list = stateset.textureAttributeMapList;
-            for ( var textureUnit = 0, l = list.length; textureUnit < l; textureUnit++ ) {
-                if ( !list[ textureUnit ] ) {
-                    continue;
-                }
-                this.popAttributeMap( this.textureAttributeMapList[ textureUnit ], list[ textureUnit ] );
-            }
+        this.popAttributeMap( this.attributeArray, stateset._attributeArray, stateset._activeAttribute );
+
+        var textureAttributeArrayList = stateset._textureAttributeArrayList;
+        var activeTextureUnits = stateset._activeTextureAttributeUnit;
+        var activeTextureAttribute = stateset._activeTextureAttribute;
+
+        for ( var i = 0, l = activeTextureUnits.length; i < l; i++ ) {
+            var unit = activeTextureUnits[ i ];
+            var attributeArray = textureAttributeArrayList[ unit ];
+
+            var textureUnitAttributeArray = this.getOrCreateTextureAttributeArray( unit );
+            this.popAttributeMap( textureUnitAttributeArray, attributeArray, activeTextureAttribute );
         }
 
         if ( stateset.uniforms ) {
@@ -424,13 +437,12 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         }
     },
 
-    _createAttributeStack: function ( attributeMap, key, globalDefault ) {
+    _createAttributeStack: function ( attributeArray, index, globalDefault ) {
 
         var attributeStack = new Stack();
+        attributeStack.globalDefault = globalDefault;
 
-        attributeMap[ key ] = attributeStack;
-        attributeMap[ key ].globalDefault = globalDefault;
-        attributeMap.dirty();
+        attributeArray[ index ] = attributeStack;
 
         return attributeStack;
 
@@ -438,24 +450,32 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
     haveAppliedAttribute: function ( attribute ) {
 
-        var key = attribute.getTypeMember();
-        var attributeStack = this.attributeMap[ key ];
+        var index = this.getOrCreateTypeMemberIndex( attribute );
+        var attributeStack = this.attributeArray[ index ];
         if ( !attributeStack ) {
-            attributeStack = this._createAttributeStack( this.attributeMap, key, attribute.cloneType() );
+            attributeStack = this._createAttributeStack( this.attributeArray, index, attribute.cloneType() );
         }
         attributeStack.lastApplied = attribute;
         attributeStack.asChanged = true;
 
     },
 
+    getOrCreateTypeMemberIndex: function ( attribute ) {
+        return MACROUTILS.getOrCreateStateAttributeTypeMemberIndex( attribute );
+    },
+
+    getOrCreateTextureTypeMemberIndex: function ( attribute ) {
+        return MACROUTILS.getOrCreateTextureStateAttributeTypeMemberIndex( attribute );
+    },
+
     applyAttribute: function ( attribute ) {
 
-        var key = attribute.getTypeMember();
+        var index = this.getOrCreateTypeMemberIndex( attribute );
 
-        var attributeMap = this.attributeMap;
-        var attributeStack = attributeMap[ key ];
+        var attributeArray = this.attributeArray;
+        var attributeStack = attributeArray[ index ];
         if ( !attributeStack ) {
-            attributeStack = this._createAttributeStack( this.attributeMap, key, attribute.cloneType() );
+            attributeStack = this._createAttributeStack( attributeArray, index, attribute.cloneType() );
         }
 
         if ( attributeStack.lastApplied !== attribute ) {
@@ -473,16 +493,11 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
         var gl = this.getGraphicContext();
         gl.activeTexture( gl.TEXTURE0 + unit );
-        var key = attribute.getTypeMember();
-
-        if ( !this.textureAttributeMapList[ unit ] ) {
-            this.textureAttributeMapList[ unit ] = new Map();
-        }
-
-        var textureUnitAttributeMap = this.getOrCreateTextureAttributeMap( unit );
-        var attributeStack = textureUnitAttributeMap[ key ];
+        var index = MACROUTILS.getOrCreateTextureStateAttributeTypeMemberIndex( attribute );
+        var textureUnitAttributeArray = this.getOrCreateTextureAttributeArray( unit );
+        var attributeStack = textureUnitAttributeArray[ index ];
         if ( !attributeStack ) {
-            attributeStack = this._createAttributeStack( textureUnitAttributeMap, key, attribute.cloneType() );
+            attributeStack = this._createAttributeStack( textureUnitAttributeArray, index, attribute.cloneType() );
         }
 
 
@@ -507,7 +522,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
     },
 
     getLastProgramApplied: function () {
-        return this.attributeMap.Program.lastApplied;
+        return this._programAttribute.lastApplied;
     },
 
     applyDefault: function () {
@@ -518,65 +533,72 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         // CP: ^^ really ? check it / report an issue
         this.popAllStateSets();
 
-        this.applyAttributeMap( this.attributeMap );
-        this.applyTextureAttributeMapList( this.textureAttributeMapList );
+        this._currentShaderGenerator = undefined;
+
+        this.applyAttributeMap( this.attributeArray );
+        this.applyTextureAttributeMapList( this.textureAttributeArrayList );
     },
 
     apply: function () {
+        this._numApply++;
 
         var lastProgram = this.getLastProgramApplied();
 
-        this.applyAttributeMap( this.attributeMap );
-        this.applyTextureAttributeMapList( this.textureAttributeMapList );
+        // needed before calling applyAttributeMap because
+        // we cache needed StateAttribute from the compiler
+        this._currentShaderGenerator = this.getCurrentShaderGenerator();
+
+        this.applyAttributeMap( this.attributeArray );
+        this.applyTextureAttributeMapList( this.textureAttributeArrayList );
 
         var generatedProgram = this._generateAndApplyProgram();
+        var lastApplied = this.getLastProgramApplied();
 
         if ( generatedProgram ) {
             // will cache uniform and apply them with the program
 
-            this._applyGeneratedProgramUniforms( this.attributeMap.Program.lastApplied );
+           this._applyGeneratedProgramUniforms( lastApplied );
 
         } else {
 
             // custom program so we will iterate on uniform from the program and apply them
             // but in order to be able to use Attribute in the state graph we will check if
             // our program want them. It must be defined by the user
-            this._applyCustomProgramUniforms( this.attributeMap.Program.lastApplied );
+           this._applyCustomProgramUniforms( lastApplied );
 
         }
 
         // reset reference of last applied matrix
-        if ( lastProgram !== this.getLastProgramApplied() ) {
+        if ( lastProgram !== lastApplied ) {
             this._modelViewMatrix = undefined;
             this._projectionMatrix = undefined;
         }
     },
 
 
-    applyAttributeMap: function ( attributeMap ) {
+    applyAttributeMap: function ( attributeArray ) {
 
+        this.lastAppliedAttributeLength = 0;
         var attributeStack;
-        var attributeMapKeys = attributeMap.getKeys();
+        var validAttributeType = this._currentShaderGenerator ? this._currentShaderGenerator.getShaderCompiler().validAttributeTypeCache : undefined;
 
-        for ( var i = 0, l = attributeMapKeys.length; i < l; i++ ) {
-            var key = attributeMapKeys[ i ];
+        for ( var i = 0, l = attributeArray.length; i < l; i++ ) {
 
-            attributeStack = attributeMap[ key ];
-            if ( !attributeStack || !attributeStack.asChanged ) {
-                continue;
-            }
+            attributeStack = attributeArray[ i ];
+            if ( !attributeStack ) continue;
 
             var attribute;
-            if ( attributeStack.values().length === 0 ) {
-                attribute = attributeStack.globalDefault;
-            } else {
-                attribute = attributeStack.back().object;
-            }
+            if ( attributeStack.values().length ) attribute = attributeStack.back().object;
+            else attribute = attributeStack.globalDefault;
 
-            /*develblock:start*/
-            Notify.assert( key === attribute.getTypeMember(), 'State:applyAttributeMap attribute key ' + key + ' !== ' + attribute.getTypeMember() );
-            /*develblock:end*/
+            // need to get the current attribute to check the type
+            if ( validAttributeType &&
+                 validAttributeType[ attribute.attributeTypeId ] &&
+                 !this._currentShaderGenerator.filterAttributeTypes( attribute ) ) {
+                     this.lastAppliedAttribute[ this.lastAppliedAttributeLength++ ] = attribute;
+                 }
 
+            if ( !attributeStack.asChanged ) continue;
 
             if ( attributeStack.lastApplied !== attribute ) {
 
@@ -586,8 +608,8 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
                 attributeStack.lastApplied = attribute;
 
             }
-            attributeStack.asChanged = false;
 
+            attributeStack.asChanged = false;
         }
     },
 
@@ -629,67 +651,50 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         }
     },
 
+    applyTextureAttributeMapList: function ( textureAttributesArrayList ) {
 
-    // this funtion must called only if stack has changed
-    // check applyTextureAttributeMapList
-    _applyTextureAttributeStack: function ( gl, textureUnit, attributeStack ) {
+        this.lastAppliedTextureAttributeLength = 0;
 
-        var attribute;
-        if ( attributeStack.values().length === 0 ) {
-            attribute = attributeStack.globalDefault;
-        } else {
-            attribute = attributeStack.back().object;
-        }
-
-        // if the the stack has changed but the last applied attribute is the same
-        // then we dont need to apply it again
-        if ( attributeStack.lastApplied !== attribute ) {
-
-            gl.activeTexture( gl.TEXTURE0 + textureUnit );
-            attribute.apply( this, textureUnit );
-
-            attributeStack.lastApplied = attribute;
-        }
-
-        attributeStack.asChanged = false;
-    },
-
-    applyTextureAttributeMapList: function ( textureAttributesMapList ) {
         var gl = this._graphicContext;
-        var textureAttributeMap;
+        var textureAttributeArray;
+        var validAttributeType = this._currentShaderGenerator ? this._currentShaderGenerator.getShaderCompiler().validAttributeTypeCache : undefined;
 
-        for ( var textureUnit = 0, l = textureAttributesMapList.length; textureUnit < l; textureUnit++ ) {
-            textureAttributeMap = textureAttributesMapList[ textureUnit ];
-            if ( !textureAttributeMap ) {
-                continue;
-            }
+        for ( var textureUnit = 0, l = textureAttributesArrayList.length; textureUnit < l; textureUnit++ ) {
+            textureAttributeArray = textureAttributesArrayList[ textureUnit ];
 
+            for ( var i = 0, lt = textureAttributeArray.length; i < lt; i++ ) {
 
-            var textureAttributeMapKeys = textureAttributeMap.getKeys();
-
-            for ( var i = 0, lt = textureAttributeMapKeys.length; i < lt; i++ ) {
-                var key = textureAttributeMapKeys[ i ];
-
-                var attributeStack = textureAttributeMap[ key ];
+                var attributeStack = textureAttributeArray[ i ];
 
                 // skip if not stack or not changed in stack
-                if ( !attributeStack || !attributeStack.asChanged ) continue;
+                if ( !attributeStack ) continue;
 
-                this._applyTextureAttributeStack( gl, textureUnit, attributeStack );
-                // var attribute;
-                // if ( attributeStack.values().length === 0 ) {
-                //     attribute = attributeStack.globalDefault;
-                // } else {
-                //     attribute = attributeStack.back().object;
-                // }
-                // if ( attributeStack.asChanged ) {
+                var attribute;
+                if ( attributeStack.values().length ) attribute = attributeStack.back().object;
+                else attribute = attributeStack.globalDefault;
 
-                //     gl.activeTexture( gl.TEXTURE0 + textureUnit );
-                //     attribute.apply( this, textureUnit );
-                //     attributeStack.lastApplied = attribute;
-                //     attributeStack.asChanged = false;
+                // need to get the current attribute to check the type
+                if ( validAttributeType && ( !attribute.isTextureNull || !attribute.isTextureNull() ) &&
 
-                // }
+                     validAttributeType[ attribute.attributeTypeId ] &&
+                     !this._currentShaderGenerator.filterAttributeTypes( attribute ) ) {
+                     this.lastAppliedTextureAttribute[ this.lastAppliedTextureAttributeLength++ ] = attribute;
+                     }
+
+                if ( !attributeStack.asChanged ) continue;
+
+                // if the the stack has changed but the last applied attribute is the same
+                // then we dont need to apply it again
+                if ( attributeStack.lastApplied !== attribute ) {
+
+                    gl.activeTexture( gl.TEXTURE0 + textureUnit );
+                    attribute.apply( this, textureUnit );
+
+                    attributeStack.lastApplied = attribute;
+                }
+
+                attributeStack.asChanged = false;
+
             }
         }
     },
@@ -700,78 +705,76 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
     },
 
     setGlobalDefaultAttribute: function ( attribute ) {
-        var typeMember = attribute.getTypeMember();
-        var attributeMap = this.attributeMap;
+        var attributeArray = this.attributeArray;
+        var index = this.getOrCreateTypeMemberIndex( attribute );
 
-        if ( attributeMap[ typeMember ] === undefined ) {
-            this._createAttributeStack( attributeMap, typeMember, attribute );
+        if ( attributeArray[ index ] === undefined ) {
+            this._createAttributeStack( attributeArray, index, attribute );
         } else {
-            attributeMap[ typeMember ].globalDefault = attribute;
+            attributeArray[ index ].globalDefault = attribute;
         }
+
     },
 
     getGlobalDefaultAttribute: function ( typeMember ) {
-        var attributeMap = this.attributeMap;
-        if ( attributeMap[ typeMember ] === undefined ) return undefined;
-
-        return attributeMap[ typeMember ].globalDefault;
+        var attributeArray = this.attributeArray;
+        var index = MACROUTILS.getIdFromTypeMember( typeMember );
+        if ( index === undefined ) return undefined;
+        return ( attributeArray[ index ] ? attributeArray[ index ].globalDefault : undefined );
     },
 
     setGlobalDefaultTextureAttribute: function ( unit, attribute ) {
-        var attributeMap = this.getOrCreateTextureAttributeMap( unit );
+        var attributeArray = this.getOrCreateTextureAttributeArray( unit );
+        var index = this.getOrCreateTextureTypeMemberIndex( attribute );
 
-        var typeMember = attribute.getTypeMember();
-
-        if ( attributeMap[ typeMember ] === undefined ) {
-            this._createAttributeStack( attributeMap, typeMember, attribute );
+        if ( attributeArray[ index ] === undefined ) {
+            this._createAttributeStack( attributeArray, index, attribute );
         } else {
-            attributeMap[ typeMember ].globalDefault = attribute;
+            attributeArray[ index ].globalDefault = attribute;
         }
 
     },
 
     getGlobalDefaultTextureAttribute: function ( unit, typeMember ) {
-        var attributeMap = this.getOrCreateTextureAttributeMap( unit );
-        var as = attributeMap[ typeMember ];
-        return as.globalDefault;
+        var attributeArray = this.getOrCreateTextureAttributeArray( unit );
+        var index = MACROUTILS.getTextureIdFromTypeMember( typeMember );
+        if ( index === undefined ) return undefined;
+        return ( attributeArray[ index ] ? attributeArray[ index ].globalDefault : undefined );
     },
 
-    getOrCreateTextureAttributeMap: function ( unit ) {
-        if ( !this.textureAttributeMapList[ unit ] ) this.textureAttributeMapList[ unit ] = new Map();
-        return this.textureAttributeMapList[ unit ];
+    getOrCreateTextureAttributeArray: function ( unit ) {
+        if ( !this.textureAttributeArrayList[ unit ] ) this.textureAttributeArrayList[ unit ] = [];
+        return this.textureAttributeArrayList[ unit ];
     },
 
-    pushAttributeMap: function ( attributeMap, stateSetAttributeMap ) {
+    pushAttributeMap: function ( attributeArray, stateSetAttributeArray, validAttributeArray ) {
         /*jshint bitwise: false */
         var attributeStack;
-        var stateSetAttributeMapKeys = stateSetAttributeMap.getKeys();
 
-        for ( var i = 0, l = stateSetAttributeMapKeys.length; i < l; i++ ) {
+        for ( var i = 0, l = validAttributeArray.length; i < l; i++ ) {
 
-            var type = stateSetAttributeMapKeys[ i ];
-            var attributePair = stateSetAttributeMap[ type ];
+            var index = validAttributeArray[ i ];
+            var attributePair = stateSetAttributeArray[ index ];
             var attribute = attributePair.getAttribute();
 
-            if ( attributeMap[ type ] === undefined ) {
-                this._createAttributeStack( attributeMap, type, attribute.cloneType() );
+            attributeStack = attributeArray[ index ];
+            if ( !attributeStack ) {
+                this._createAttributeStack( attributeArray, index, attribute.cloneType() );
+                attributeStack = attributeArray[ index ];
             }
 
-            attributeStack = attributeMap[ type ];
             this.pushCheckOverride( attributeStack, attribute, attributePair.getValue() );
             attributeStack.asChanged = true;
         }
         /*jshint bitwise: true */
     },
 
-    popAttributeMap: function ( attributeMap, stateSetAttributeMap ) {
+    popAttributeMap: function ( attributeArray, stateSetAttributeArray, activeAttribute ) {
 
-        var attributeStack;
-        var stateSetAttributeMapKeys = stateSetAttributeMap.getKeys();
+        for ( var i = 0, l = activeAttribute.length; i < l; i++ ) {
 
-        for ( var i = 0, l = stateSetAttributeMapKeys.length; i < l; i++ ) {
-
-            var type = stateSetAttributeMapKeys[ i ];
-            attributeStack = attributeMap[ type ];
+            var index = activeAttribute[ i ];
+            var attributeStack = attributeArray[ index ];
             attributeStack.pop();
             attributeStack.asChanged = true;
 
@@ -805,7 +808,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
     enableVertexColor: function () {
 
-        var program = this.attributeMap.Program.lastApplied;
+        var program = this._programAttribute.lastApplied;
 
         if ( !program.getUniformsCache().ArrayColorEnabled ||
             !program.getAttributesCache().Color ) return; // no color uniform or attribute used, exit
@@ -826,7 +829,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
     disableVertexColor: function () {
 
-        var program = this.attributeMap.Program.lastApplied;
+        var program = this._programAttribute.lastApplied;
 
         if ( !program.getUniformsCache().ArrayColorEnabled ||
             !program.getAttributesCache().Color ) return; // no color uniform or attribute used, exit
@@ -934,7 +937,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
     _getActiveUniformsFromProgramAttributes: function ( program, activeUniformsList ) {
 
-        var attributeMapStack = this.attributeMap;
+        var attributeArrayStack = this.attributeArray;
 
         var attributeKeys = program.getTrackAttributes().attributeKeys;
 
@@ -943,7 +946,8 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
             for ( var i = 0, l = attributeKeys.length; i < l; i++ ) {
 
                 var key = attributeKeys[ i ];
-                var attributeStack = attributeMapStack[ key ];
+                var index = this.typeMember[ key ];
+                var attributeStack = attributeArrayStack[ index ];
                 if ( attributeStack === undefined ) {
                     continue;
                 }
@@ -975,7 +979,7 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
             var textureAttributeKeys = textureAttributeKeysList[ unit ];
             if ( textureAttributeKeys === undefined ) continue;
 
-            var unitTextureAttributeList = this.textureAttributeMapList[ unit ];
+            var unitTextureAttributeList = this.textureAttributeArrayList[ unit ];
             if ( unitTextureAttributeList === undefined ) continue;
 
             for ( var i = 0, l = textureAttributeKeys.length; i < l; i++ ) {
@@ -1080,25 +1084,45 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         };
     } )(),
 
+    getCurrentShaderGenerator: function () {
 
+        var programStack = this._programAttribute;
+
+        if ( programStack !== undefined && programStack.values().length !== 0 && programStack.back().value !== StateAttribute.OFF )
+            return undefined;
+
+        // no custom program look into the stack of ShaderGenerator name
+        // what we should use to generate a program
+        var last = this._shaderGeneratorNames.back();
+        var shaderGenerator = this._shaderGeneratorProxy.getShaderGenerator( last ? last.object : undefined );
+        return shaderGenerator;
+    },
+
+    nbSwitch: 0,
+    previousProgram: undefined,
+    nbProgram: {},
+    setCompilerProgram: {},
+    traceProgram: [],
     // apply a generated program if necessary
     // It build a Shader from the shader generator
     // it apply for the following condition
     // the user has not put a Pogram in the stack or if he has he added one with OFF
     _generateAndApplyProgram: function () {
 
-        var attributeMap = this.attributeMap;
-        if ( attributeMap.Program !== undefined && attributeMap.Program.values().length !== 0 && attributeMap.Program.back().value !== StateAttribute.OFF )
-            return undefined;
+        if ( !this._currentShaderGenerator ) return undefined;
+
+        if ( window.useSameProgram && window.lastProgram ) {
+            this.applyAttribute( window.lastProgram );
+            return window.lastProgram;
+        }
 
         // no custom program look into the stack of ShaderGenerator name
         // what we should use to generate a program
-
-        var last = this._shaderGeneratorNames.back();
-        var shaderGenerator = this._shaderGeneratorProxy.getShaderGenerator( last ? last.object : undefined );
+        var shaderGenerator = this._currentShaderGenerator;
 
         var program = shaderGenerator.getOrCreateProgram( this );
         this.applyAttribute( program );
+        window.lastProgram = program;
         return program;
     },
 
@@ -1157,6 +1181,14 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
 
     },
 
+    nbCacheUniformsForGeneratedProgram: 0,
+    nbForeignKeys: 0,
+    nbCalls: 0,
+    nbApplyUniform: 0,
+    nbForeignApplyUniform: 0,
+    numFrame: 0,
+    nbRegularUniformCall: 0,
+    nbMatrixUniformCall: 0,
     _applyGeneratedProgramUniforms: function ( program ) {
 
         // note that about TextureAttribute that need uniform on unit we would need to improve
@@ -1165,9 +1197,23 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         // when we apply the shader for the first time, we want to compute the active uniforms for this shader and the list of uniforms not extracted from attributes called foreignUniforms
 
         // typically the following code will be executed once on the first execution of generated program
+        // if ( this.numFrame !== this._frameStamp.getFrameNumber() ) {
+        //     // console.log( this.nbCalls, this.nbForeignApplyUniform, this.nbApplyUniform );
+        //     // console.log( this.nbCalls, this.nbRegularUniformCall, this.nbMatrixUniformCall );
+        //     this.nbCalls = 0;
+        //     this.nbCacheUniformsForGeneratedProgram = 0;
+        //     this.nbApplyUniform = 0;
+        //     this.nbRegularUniformCall = 0;
+        //     this.nbMatrixUniformCall = 0;
+        //     this.nbForeignApplyUniform = 0;
+
+        //     this.numFrame = this._frameStamp.getFrameNumber();
+        // }
+        this.nbCalls++;
 
         var foreignUniformKeys = program.getForeignUniforms();
         if ( !foreignUniformKeys ) {
+            this.nbCacheUniformsForGeneratedProgram++;
             this._cacheUniformsForGeneratedProgram( program );
             foreignUniformKeys = program.getForeignUniforms();
         }
@@ -1182,19 +1228,18 @@ State.prototype = MACROUTILS.objectLibraryClass( MACROUTILS.objectInherit( Objec
         var i, l, name, location;
         var activeUniformKeys = activeUniformMap.getKeys();
 
+        this.nbApplyUniform += activeUniformKeys.length;
         for ( i = 0, l = activeUniformKeys.length; i < l; i++ ) {
 
             name = activeUniformKeys[ i ];
             location = programUniformMap[ name ];
             activeUniformMap[ name ].apply( this._graphicContext, location );
-
         }
 
         var uniformMapStack = this.uniforms;
-
         // apply now foreign uniforms, it's uniforms needed by the program but not contains in attributes used to generate this program
+        this.nbForeignApplyUniform += foreignUniformKeys.length;
         for ( i = 0, l = foreignUniformKeys.length; i < l; i++ ) {
-
             name = foreignUniformKeys[ i ];
             var uniformStack = uniformMapStack[ name ];
             location = programUniformMap[ name ];
