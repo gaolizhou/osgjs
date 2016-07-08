@@ -77,6 +77,15 @@ MACROUTILS.createPrototypeStateAttribute( MorphAttribute, MACROUTILS.objectInher
     },
 
     getHash: function () {
+        if ( window.useHashCache ) {
+            if ( !this._hashCashed )
+                this._hashCashed = this.getHashInternal();
+            return this._hashCashed;
+        }
+        return this.getHashInternal();
+    },
+
+    getHashInternal: function () {
         return this.getTypeMember() + this._hashNames + this.getNumTargets() + this.isEnabled();
     },
 

@@ -78,7 +78,11 @@ var State = function ( shaderGeneratorProxy ) {
     this._numPushStateSet = 0;
     this._numApply = 0;
 
+    this._programUniformCache = [];
+
+    this._cacheUniformId = 0;
 };
+
 
 State.TypeMemberIndex = 0;
 State.TextureTypeMemberIndex = 0;
@@ -542,7 +546,7 @@ MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototy
     apply: function () {
         this._numApply++;
 
-        var lastProgram = this.getLastProgramApplied();
+        var previousProgram = this.getLastProgramApplied();
 
         // needed before calling applyAttributeMap because
         // we cache needed StateAttribute from the compiler
@@ -551,25 +555,28 @@ MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototy
         this.applyAttributeMap( this.attributeArray );
         this.applyTextureAttributeMapList( this.textureAttributeArrayList );
 
-        var generatedProgram = this._generateAndApplyProgram();
-        var lastApplied = this.getLastProgramApplied();
+        var lastApplied;
+        var generatedProgram;
+        if ( this._currentShaderGenerator ) {
+            // no custom program look into the stack of ShaderGenerator name
+            // what we should use to generate a program
+            generatedProgram = this._currentShaderGenerator.getOrCreateProgram( this );
+            this.applyAttribute( generatedProgram );
+            lastApplied = generatedProgram;
 
-        if ( generatedProgram ) {
             // will cache uniform and apply them with the program
-
-           this._applyGeneratedProgramUniforms( lastApplied );
+            this._applyGeneratedProgramUniforms( generatedProgram );
 
         } else {
-
+            lastApplied = this.getLastProgramApplied();
             // custom program so we will iterate on uniform from the program and apply them
             // but in order to be able to use Attribute in the state graph we will check if
             // our program want them. It must be defined by the user
            this._applyCustomProgramUniforms( lastApplied );
-
         }
 
         // reset reference of last applied matrix
-        if ( lastProgram !== lastApplied ) {
+        if ( previousProgram !== lastApplied ) {
             this._modelViewMatrix = undefined;
             this._projectionMatrix = undefined;
         }
@@ -1098,34 +1105,6 @@ MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototy
         return shaderGenerator;
     },
 
-    nbSwitch: 0,
-    previousProgram: undefined,
-    nbProgram: {},
-    setCompilerProgram: {},
-    traceProgram: [],
-    // apply a generated program if necessary
-    // It build a Shader from the shader generator
-    // it apply for the following condition
-    // the user has not put a Pogram in the stack or if he has he added one with OFF
-    _generateAndApplyProgram: function () {
-
-        if ( !this._currentShaderGenerator ) return undefined;
-
-        if ( window.useSameProgram && window.lastProgram ) {
-            this.applyAttribute( window.lastProgram );
-            return window.lastProgram;
-        }
-
-        // no custom program look into the stack of ShaderGenerator name
-        // what we should use to generate a program
-        var shaderGenerator = this._currentShaderGenerator;
-
-        var program = shaderGenerator.getOrCreateProgram( this );
-        this.applyAttribute( program );
-        window.lastProgram = program;
-        return program;
-    },
-
     _computeForeignUniforms: function ( programUniformMap, activeUniformMap ) {
 
         var uniformMapKeys = programUniformMap.getKeys();
@@ -1189,6 +1168,71 @@ MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototy
     numFrame: 0,
     nbRegularUniformCall: 0,
     nbMatrixUniformCall: 0,
+
+    _copyUniformEntry: function ( uniform ) {
+
+        var internalArray = uniform.getInternalArray();
+        var cacheData = undefined;
+        if ( internalArray.length < 16 ) {
+            if ( internalArray instanceof Float32Array ) {
+                cacheData = new Float32Array( internalArray );
+            } else if ( internalArray instanceof Int32Array ) {
+                cacheData = new Int32Array( internalArray );
+            } else if ( internalArray instanceof Array ) {
+                cacheData = internalArray.slice();
+            } else {
+
+                console.log( 'not found' );
+            }
+        }
+        return cacheData;
+    },
+
+    _initUniformCache: function ( program ) {
+
+        var activeUniformMap = program.getActiveUniforms();
+        var activeUniformKeys = activeUniformMap.getKeys();
+
+        var foreignUniformKeys = program.getForeignUniforms();
+        var uniformMapStack = this.uniforms;
+
+        var cacheForeignUniforms = [];
+        var cacheActiveUniforms = [];
+
+        var i, l, cache, name, cacheData, uniform;
+
+        program._cacheUniformId = this._cacheUniformId++;
+        this._programUniformCache[ program._cacheUniformId ] = {};
+
+        if ( foreignUniformKeys.length ) {
+            cache = cacheForeignUniforms;
+            for ( i = 0, l = foreignUniformKeys.length; i < l; i++ ) {
+                name = foreignUniformKeys[ i ];
+                var uniStack = uniformMapStack[ name ];
+                if ( uniStack ) {
+                    uniform = uniStack.globalDefault;
+                    cacheData = this._copyUniformEntry( uniform );
+                    cache.push( cacheData );
+                }
+
+            }
+        }
+
+        if ( activeUniformKeys.length ) {
+            cache = cacheActiveUniforms;
+            for ( i = 0, l = activeUniformKeys.length; i < l; i++ ) {
+                name = activeUniformKeys[ i ];
+                uniform = activeUniformMap[ name ];
+                cacheData = this._copyUniformEntry( uniform );
+                cache.push( cacheData );
+            }
+        }
+
+        this._programUniformCache[ program._cacheUniformId ].foreign = cacheForeignUniforms;
+        this._programUniformCache[ program._cacheUniformId ].active = cacheActiveUniforms;
+
+    },
+
     _applyGeneratedProgramUniforms: function ( program ) {
 
         // note that about TextureAttribute that need uniform on unit we would need to improve
@@ -1216,40 +1260,97 @@ MACROUTILS.createPrototypeClass( State, MACROUTILS.objectInherit( Object.prototy
             this.nbCacheUniformsForGeneratedProgram++;
             this._cacheUniformsForGeneratedProgram( program );
             foreignUniformKeys = program.getForeignUniforms();
-        }
 
+            this._initUniformCache( program );
+        }
 
         var programUniformMap = program.getUniformsCache();
         var activeUniformMap = program.getActiveUniforms();
 
+        var cacheUniformsActive = this._programUniformCache[ program._cacheUniformId ].active;
+        var cacheUniformsForeign = this._programUniformCache[ program._cacheUniformId ].foreign;
+        var cacheUniform, internal;
 
         // apply active uniforms
         // caching uniforms from attribtues make it impossible to overwrite uniform with a custom uniform instance not used in the attributes
-        var i, l, name, location;
+        var i, l, name, location, uniform;
         var activeUniformKeys = activeUniformMap.getKeys();
 
         this.nbApplyUniform += activeUniformKeys.length;
         for ( i = 0, l = activeUniformKeys.length; i < l; i++ ) {
 
             name = activeUniformKeys[ i ];
+            uniform = activeUniformMap[ name ];
+
+            if ( window.useUniformCache ) {
+                internal = uniform.getInternalArray();
+                if ( internal.length <= 4 ) {
+                    cacheUniform = cacheUniformsActive[ i ];
+                    if ( internal.length === 1 ) {
+                        if ( internal[ 0 ] === cacheUniform[ 0 ] ) continue;
+                        cacheUniform[ 0 ] = internal[ 0 ];
+                    } else if ( internal.length === 2 ) {
+                        if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] ) continue;
+                        cacheUniform[ 0 ] = internal[ 0 ];
+                        cacheUniform[ 1 ] = internal[ 1 ];
+                    } else if ( internal.length === 3 ) {
+                        if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] && internal[ 2 ] === cacheUniform[ 2 ] ) continue;
+                        cacheUniform[ 0 ] = internal[ 0 ];
+                        cacheUniform[ 1 ] = internal[ 1 ];
+                        cacheUniform[ 2 ] = internal[ 2 ];
+                    } else if ( internal.length === 4 ) {
+                        if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] && internal[ 2 ] === cacheUniform[ 2 ] && internal[ 3 ] === cacheUniform[ 3 ] ) continue;
+                        cacheUniform[ 0 ] = internal[ 0 ];
+                        cacheUniform[ 1 ] = internal[ 1 ];
+                        cacheUniform[ 2 ] = internal[ 2 ];
+                        cacheUniform[ 3 ] = internal[ 3 ];
+                    }
+                }
+            }
             location = programUniformMap[ name ];
-            activeUniformMap[ name ].apply( this._graphicContext, location );
+            uniform.apply( this._graphicContext, location );
         }
 
         var uniformMapStack = this.uniforms;
+
         // apply now foreign uniforms, it's uniforms needed by the program but not contains in attributes used to generate this program
         this.nbForeignApplyUniform += foreignUniformKeys.length;
         for ( i = 0, l = foreignUniformKeys.length; i < l; i++ ) {
             name = foreignUniformKeys[ i ];
             var uniformStack = uniformMapStack[ name ];
             location = programUniformMap[ name ];
-            var uniform;
             if ( uniformStack !== undefined ) {
                 if ( uniformStack.values().length === 0 ) {
                     uniform = uniformStack.globalDefault;
                     Notify.warn( 'Uniform Default Not attached to a StateSet in Scene Hierarchy: ' + uniformStack.globalDefault.getName() );
                 } else {
                     uniform = uniformStack.back().object;
+                }
+
+                if ( window.useUniformCache ) {
+                    internal = uniform.getInternalArray();
+                    if ( internal.length <= 4 ) {
+                        cacheUniform = cacheUniformsForeign[ i ];
+                        if ( internal.length === 1 ) {
+                            if ( internal[ 0 ] === cacheUniform[ 0 ] ) continue;
+                            cacheUniform[ 0 ] = internal[ 0 ];
+                        } else if ( internal.length === 2 ) {
+                            if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] ) continue;
+                            cacheUniform[ 0 ] = internal[ 0 ];
+                            cacheUniform[ 1 ] = internal[ 1 ];
+                        } else if ( internal.length === 3 ) {
+                            if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] && internal[ 2 ] === cacheUniform[ 2 ] ) continue;
+                            cacheUniform[ 0 ] = internal[ 0 ];
+                            cacheUniform[ 1 ] = internal[ 1 ];
+                            cacheUniform[ 2 ] = internal[ 2 ];
+                        } else if ( internal.length === 4 ) {
+                            if ( internal[ 0 ] === cacheUniform[ 0 ] && internal[ 1 ] === cacheUniform[ 1 ] && internal[ 2 ] === cacheUniform[ 2 ] && internal[ 3 ] === cacheUniform[ 3 ] ) continue;
+                            cacheUniform[ 0 ] = internal[ 0 ];
+                            cacheUniform[ 1 ] = internal[ 1 ];
+                            cacheUniform[ 2 ] = internal[ 2 ];
+                            cacheUniform[ 3 ] = internal[ 3 ];
+                        }
+                    }
                 }
 
                 uniform.apply( this._graphicContext, location );

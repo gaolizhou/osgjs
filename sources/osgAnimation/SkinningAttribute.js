@@ -71,6 +71,15 @@ MACROUTILS.createPrototypeStateAttribute( SkinningAttribute, MACROUTILS.objectIn
     },
 
     getHash: function () {
+        if ( window.useHashCache ) {
+            if ( !this._hashCashed )
+                this._hashCashed = this.getHashInternal();
+            return this._hashCashed;
+        }
+        return this.getHashInternal();
+    },
+
+    getHashInternal: function () {
         // bonesize is important, as the shader itself
         // has a different code and uniform are not shared
         // geoms have each their own bones matrix palette

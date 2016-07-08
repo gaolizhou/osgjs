@@ -361,6 +361,7 @@ MACROUTILS.createPrototypeClass( Geometry, MACROUTILS.objectInherit( Node.protot
     } )(),
 
     drawImplementation: function ( state ) {
+        if ( !window.doRender ) return;
 
         var program = state.getLastProgramApplied();
         var prgID = program.getInstanceID();

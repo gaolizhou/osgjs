@@ -101,7 +101,6 @@ RenderLeaf.prototype = {
 
             obj.apply( state, this._modelView, this._modelWorld, this._view, this._projection, this._normal );
 
-            // if ( window.doRender )
             this._geometry.drawImplementation( state );
 
         };
